@@ -81,9 +81,10 @@ import {
 } from "./KeybindingsKeyboardMap";
 import {
   buildKeyboardIndex,
+  comboLabel,
   comboToKeybindingInput,
   rowsForCombo,
-  type KeyboardIndex,
+  selectionNote,
   type KeyCombo,
 } from "./KeybindingsKeyboardMap.logic";
 import { SettingsGroup } from "./SettingsGroup";
@@ -795,6 +796,8 @@ interface KeybindingRowActions {
   onSave: (input: ServerUpsertKeybindingInput) => void;
   onReset: (row: KeybindingRow) => void;
   onRemove: (row: KeybindingRow) => void;
+  // Only the controls go inert, so hover preview still reaches read-only rows.
+  readOnly: boolean;
 }
 
 type KeybindingRowProps = KeybindingRowActions & {
@@ -988,13 +991,15 @@ function KeybindingRowWhen({
   row,
   editor,
   variables,
+  readOnly,
 }: {
   row: KeybindingRow;
   editor: KeybindingRowEditor;
   variables: ReadonlyArray<WhenVariableOption>;
+  readOnly: boolean;
 }) {
   return (
-    <span className="flex h-6 items-center gap-1.5">
+    <span inert={readOnly} className="flex h-6 items-center gap-1.5">
       <span className="text-xs leading-none text-muted-foreground/70">When</span>
       <WhenClauseControl
         label={commandLabel(row.command)}
@@ -1022,7 +1027,8 @@ function KeybindingHoverRowMenu(props: {
 }
 
 function KeybindingSettingsRow(props: KeybindingRowProps) {
-  const { row, isSaving, anchorId, allRows, variables, onSave, onReset, onRemove } = props;
+  const { row, isSaving, anchorId, allRows, variables, readOnly, onSave, onReset, onRemove } =
+    props;
   const editor = useKeybindingRowEditor({ row, allRows, onSave });
 
   return (
@@ -1031,9 +1037,11 @@ function KeybindingSettingsRow(props: KeybindingRowProps) {
       data-keybinding-row={row.id}
       className="group/row rounded-none"
       title={<KeybindingRowTitle row={row} />}
-      description={<KeybindingRowWhen row={row} editor={editor} variables={variables} />}
+      description={
+        <KeybindingRowWhen row={row} editor={editor} variables={variables} readOnly={readOnly} />
+      }
       control={
-        <div className="flex flex-wrap items-center justify-end gap-1.5">
+        <div inert={readOnly} className="flex flex-wrap items-center justify-end gap-1.5">
           <KeybindingConflictWarning labels={editor.conflictLabels} />
           <KeybindingHoverRowMenu
             row={row}
@@ -1147,7 +1155,8 @@ function NewKeybindingCommandSelect({
       value={draft.commandDraft}
       onValueChange={(value) => draft.setCommandDraft(value as KeybindingCommand)}
     >
-      <SelectTrigger size="sm" className={className}>
+      {/* The row opens from a button that disables itself, so focus lands here. */}
+      <SelectTrigger size="sm" autoFocus className={className}>
         <SelectValue placeholder="Command" />
       </SelectTrigger>
       <SelectContent alignItemWithTrigger={false} matchTriggerWidth={false} className="max-h-72">
@@ -1310,24 +1319,20 @@ function BrowserKeybindingNotice() {
   );
 }
 
-function previewRowFromTarget(
-  store: KeyboardPreviewStore,
-  index: KeyboardIndex,
-  target: EventTarget | null,
-) {
-  const rowId =
+function previewRowFromTarget(store: KeyboardPreviewStore, target: EventTarget | null) {
+  store.set(
     target instanceof Element
-      ? target.closest<HTMLElement>("[data-keybinding-row]")?.dataset.keybindingRow
-      : undefined;
-  store.set(rowId ? (index.comboByRowId.get(rowId) ?? null) : null);
+      ? (target.closest<HTMLElement>("[data-keybinding-row]")?.dataset.keybindingRow ?? null)
+      : null,
+  );
 }
 
 // Delegated on the list container so hovering a row never re-renders the list.
-function keyboardPreviewHandlers(store: KeyboardPreviewStore, index: KeyboardIndex) {
+function keyboardPreviewHandlers(store: KeyboardPreviewStore) {
   return {
-    onPointerOver: (event: PointerEvent) => previewRowFromTarget(store, index, event.target),
+    onPointerOver: (event: PointerEvent) => previewRowFromTarget(store, event.target),
     onPointerLeave: () => store.set(null),
-    onFocus: (event: FocusEvent) => previewRowFromTarget(store, index, event.target),
+    onFocus: (event: FocusEvent) => previewRowFromTarget(store, event.target),
     onBlur: (event: FocusEvent) => {
       if (!event.currentTarget.contains(event.relatedTarget as Node | null)) store.set(null);
     },
@@ -1529,6 +1534,7 @@ export function KeybindingsSettingsPanel() {
     onSave: saveKeybinding,
     onReset: resetKeybinding,
     onRemove: removeKeybinding,
+    readOnly: !canWriteSettings,
   };
 
   return (
@@ -1587,13 +1593,9 @@ export function KeybindingsSettingsPanel() {
             : "This connection can view keybindings but cannot change them."}
         </p>
       ) : null}
-      <div
-        inert={!canWriteSettings}
-        className="flex flex-col gap-8"
-        {...keyboardPreviewHandlers(previewStore, keyboardIndex)}
-      >
+      <div className="flex flex-col gap-8" {...keyboardPreviewHandlers(previewStore)}>
         {isAddingBinding ? (
-          <SettingsGroup>
+          <SettingsGroup inert={!canWriteSettings}>
             <NewKeybindingSettingsRow
               key={newBindingKey}
               initialKey={newBindingKey}
@@ -1614,10 +1616,12 @@ export function KeybindingsSettingsPanel() {
             savingCommand={savingCommand}
             {...rowActions}
           />
-        ) : (
+        ) : keySelection && isAddingBinding ? null : (
           <SettingsGroup>
             <div className="px-4 py-12 text-center text-sm text-muted-foreground">
-              No keybindings match your search.
+              {keySelection
+                ? `${comboLabel(keySelection, navigator.platform)} ${selectionNote(keyboardIndex, keySelection)}`
+                : "No keybindings match your search."}
             </div>
           </SettingsGroup>
         )}

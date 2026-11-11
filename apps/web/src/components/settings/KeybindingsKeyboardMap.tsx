@@ -34,13 +34,13 @@ import {
 } from "./KeybindingsKeyboardMap.logic";
 import { KEYBINDING_GROUP_ORDER } from "./KeybindingsSettings.logic";
 
-// Hovering a list row writes here so only the map re-renders, not the list.
+// Hovering a list row writes its id here so only the map re-renders, not the list.
 export function createKeyboardPreviewStore() {
-  let value: KeyCombo | null = null;
+  let value: string | null = null;
   const listeners = new Set<() => void>();
   return {
     get: () => value,
-    set: (next: KeyCombo | null) => {
+    set: (next: string | null) => {
       if (next === value) return;
       value = next;
       for (const listener of listeners) listener();
@@ -157,10 +157,12 @@ const MapKey = memo(function MapKey({
   isSelected,
   isDimmed,
   isTabStop,
+  isCompact,
   onPress,
 }: {
   cap: Extract<KeyCap, { kind: "key" }>;
   state: KeyCapState | undefined;
+  isCompact: boolean;
   isLit: boolean;
   isSelected: boolean;
   isDimmed: boolean;
@@ -195,12 +197,13 @@ const MapKey = memo(function MapKey({
         <span aria-hidden style={HATCH_STYLE} className="pointer-events-none absolute inset-0" />
       ) : null}
       <span className="relative">{cap.label}</span>
-      {state?.caption ? (
+      {/* Stacked arrow keys are too short for text; the aria-label still names the command. */}
+      {state?.caption && !isCompact ? (
         <span className="relative mt-0.5 max-w-full truncate text-4xs font-normal opacity-80">
           {state.caption}
         </span>
       ) : null}
-      {state && state.rows.length > 1 ? (
+      {state && state.rows.length > 1 && !isCompact ? (
         <span className="absolute top-0.5 right-1 text-4xs font-semibold opacity-70">
           {state.rows.length}
         </span>
@@ -318,7 +321,9 @@ export function KeybindingsKeyboardMap({
   const [tabStop, setTabStop] = useState("escape");
   const held = useHeldKeys();
   const keysRef = useRef<HTMLDivElement>(null);
-  const preview = useSyncExternalStore(previewStore.subscribe, previewStore.get);
+  const previewRowId = useSyncExternalStore(previewStore.subscribe, previewStore.get);
+  // Resolved per render so a row rebound under the pointer never previews its old combo.
+  const preview = previewRowId === null ? null : (index.comboByRowId.get(previewRowId) ?? null);
   const recordingLit =
     held.recording && (held.key !== null || held.layer.length > 0)
       ? { key: held.key, mods: held.layer }
@@ -343,7 +348,12 @@ export function KeybindingsKeyboardMap({
     onSelect(isSame ? null : { mods: baseLayer, key });
   };
 
-  const renderCap = (cap: KeyCap, position: number, rowIndex: number): ReactNode => {
+  const renderCap = (
+    cap: KeyCap,
+    position: number,
+    rowIndex: number,
+    isStacked = false,
+  ): ReactNode => {
     const style = keyWidthStyle(cap.width);
     switch (cap.kind) {
       case "fixed":
@@ -360,7 +370,9 @@ export function KeybindingsKeyboardMap({
       case "stack":
         return (
           <div key={position} style={style} className="flex min-w-0 flex-col gap-1 [&_button]:h-4">
-            {cap.keys.map((inner, innerPosition) => renderCap(inner, innerPosition, rowIndex))}
+            {cap.keys.map((inner, innerPosition) =>
+              renderCap(inner, innerPosition, rowIndex, true),
+            )}
           </div>
         );
       case "modifier": {
@@ -393,6 +405,7 @@ export function KeybindingsKeyboardMap({
               isSelected={isSelected}
               isDimmed={lit !== null && !isLit && !isSelected}
               isTabStop={tabStop === cap.id}
+              isCompact={isStacked}
               onPress={pressKey}
             />
           </div>

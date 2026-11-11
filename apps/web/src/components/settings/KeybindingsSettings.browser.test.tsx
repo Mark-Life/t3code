@@ -177,10 +177,14 @@ describe("keyboard map", () => {
 
     await page.getByRole("button", { name: "Command", exact: true }).first().click();
     await page.getByRole("button", { name: "⌘Y: No shortcut" }).click();
-    await expect.element(page.getByText("is free.")).toBeVisible();
+    await expect.element(page.getByText("is free.", { exact: true })).toBeVisible();
+    await expect
+      .element(page.getByText("No keybindings match your search."))
+      .not.toBeInTheDocument();
     await page.getByRole("button", { name: "Assign" }).click();
 
     await expect.element(newField).toHaveValue("mod+y");
+    await expect.element(page.getByRole("combobox").first()).toHaveFocus();
     await expect.element(page.getByRole("button", { name: "Assign" })).toBeDisabled();
   });
 });
