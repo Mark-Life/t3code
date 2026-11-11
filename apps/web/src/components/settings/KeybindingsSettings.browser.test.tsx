@@ -125,3 +125,47 @@ it("re-enables Save when a When editor closes on an expression it could not pars
   await expect.element(expression).toHaveValue("terminalFocus");
   await expect.element(screen.getByRole("button", { name: "Save" })).toBeEnabled();
 });
+
+describe("keyboard map", () => {
+  async function renderWideMacPanel() {
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    await page.viewport(1280, 800);
+    const stack = new AsyncDisposableStack();
+    stack.defer(() => page.viewport(viewport.width, viewport.height));
+    stack.use(vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel"));
+    stack.use(
+      await render(
+        <RegistryProvider>
+          <KeybindingsSettingsPanel />
+        </RegistryProvider>,
+      ),
+    );
+    return stack.move();
+  }
+
+  it("filters the list to the bindings on a clicked key", async () => {
+    await using _panel = await renderWideMacPanel();
+    const terminalPill = page.getByRole("button", { name: /^Edit shortcut for Terminal: Toggle:/ });
+    await expect.element(existingPill).toBeVisible();
+
+    await page.getByRole("button", { name: /^J: / }).click();
+
+    await expect.element(terminalPill).toBeVisible();
+    await expect.element(existingPill).not.toBeInTheDocument();
+    await expect.element(page.getByText(/across all layers/)).toBeVisible();
+
+    await page.getByRole("button", { name: "Clear key filter" }).click();
+    await expect.element(existingPill).toBeVisible();
+  });
+
+  it("opens the new keybinding row prefilled with a free combo", async () => {
+    await using _panel = await renderWideMacPanel();
+
+    await page.getByRole("button", { name: "Command", exact: true }).first().click();
+    await page.getByRole("button", { name: "⌘Y: No shortcut" }).click();
+    await expect.element(page.getByText("is free.")).toBeVisible();
+    await page.getByRole("button", { name: "Assign" }).click();
+
+    await expect.element(newField).toHaveValue("mod+y");
+  });
+});

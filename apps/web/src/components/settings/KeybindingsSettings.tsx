@@ -13,7 +13,9 @@ import {
 } from "lucide-react";
 import { useLocation } from "@tanstack/react-router";
 import {
+  type FocusEvent,
   type KeyboardEvent,
+  type PointerEvent,
   type ReactNode,
   type RefObject,
   useReducer,
@@ -71,6 +73,18 @@ import {
   whenAstToExpression,
   whenNodeRemoveLabel,
 } from "./KeybindingsSettings.logic";
+import {
+  createKeyboardPreviewStore,
+  KeybindingsKeyboardMap,
+  type KeyboardPreviewStore,
+} from "./KeybindingsKeyboardMap";
+import {
+  buildKeyboardIndex,
+  comboToKeybindingInput,
+  rowsForCombo,
+  type KeyboardIndex,
+  type KeyCombo,
+} from "./KeybindingsKeyboardMap.logic";
 import { SettingsGroup } from "./SettingsGroup";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { keybindingSearchAnchorId, searchableSetting } from "./settingsSearch";
@@ -1013,6 +1027,7 @@ function KeybindingSettingsRow(props: KeybindingRowProps) {
   return (
     <SettingsRow
       id={anchorId}
+      data-keybinding-row={row.id}
       className="group/row rounded-none"
       title={<KeybindingRowTitle row={row} />}
       description={<KeybindingRowWhen row={row} editor={editor} variables={variables} />}
@@ -1039,14 +1054,16 @@ function KeybindingSettingsRow(props: KeybindingRowProps) {
 
 function useNewKeybindingDraft({
   allRows,
+  initialKey,
   onSave,
 }: {
   allRows: ReadonlyArray<KeybindingRow>;
+  initialKey: string;
   onSave: (input: ServerUpsertKeybindingInput) => void;
 }) {
   const [commandDraft, setCommandDraft] = useState<KeybindingCommand | "">("");
   const [draft, setDraft] = useReducer(keybindingRowDraftReducer, {
-    keyDraft: "",
+    keyDraft: initialKey,
     whenDraft: undefined,
     isRecording: false,
     isWhenDraftValid: true,
@@ -1107,6 +1124,7 @@ type NewKeybindingDraft = ReturnType<typeof useNewKeybindingDraft>;
 
 interface NewKeybindingProps {
   commandOptions: ReadonlyArray<KeybindingCommandOption>;
+  initialKey: string;
   allRows: ReadonlyArray<KeybindingRow>;
   variables: ReadonlyArray<WhenVariableOption>;
   isSaving: boolean;
@@ -1217,8 +1235,8 @@ function NewKeybindingCancelIcon({
 }
 
 function NewKeybindingSettingsRow(props: NewKeybindingProps) {
-  const { commandOptions, allRows, variables, isSaving, onSave, onCancel } = props;
-  const draft = useNewKeybindingDraft({ allRows, onSave });
+  const { commandOptions, initialKey, allRows, variables, isSaving, onSave, onCancel } = props;
+  const draft = useNewKeybindingDraft({ allRows, initialKey, onSave });
 
   return (
     <SettingsRow
@@ -1291,6 +1309,30 @@ function BrowserKeybindingNotice() {
   );
 }
 
+function previewRowFromTarget(
+  store: KeyboardPreviewStore,
+  index: KeyboardIndex,
+  target: EventTarget | null,
+) {
+  const rowId =
+    target instanceof Element
+      ? target.closest<HTMLElement>("[data-keybinding-row]")?.dataset.keybindingRow
+      : undefined;
+  store.set(rowId ? (index.comboByRowId.get(rowId) ?? null) : null);
+}
+
+// Delegated on the list container so hovering a row never re-renders the list.
+function keyboardPreviewHandlers(store: KeyboardPreviewStore, index: KeyboardIndex) {
+  return {
+    onPointerOver: (event: PointerEvent) => previewRowFromTarget(store, index, event.target),
+    onPointerLeave: () => store.set(null),
+    onFocus: (event: FocusEvent) => previewRowFromTarget(store, index, event.target),
+    onBlur: (event: FocusEvent) => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) store.set(null);
+    },
+  };
+}
+
 function keybindingAnchorIds(rows: ReturnType<typeof buildKeybindingRows>) {
   const ids = new Map<string, string>();
   const seen = new Set<KeybindingCommand>();
@@ -1306,9 +1348,11 @@ function keybindingAnchorIds(rows: ReturnType<typeof buildKeybindingRows>) {
 function useKeybindingCatalog() {
   const serverKeybindings = useSettingsScope().environment?.serverConfig?.keybindings;
   const merged = mergeWithDefaultKeybindings(serverKeybindings ?? []);
+  const allRows = buildKeybindingRows(merged);
   return {
     commandOptions: buildKeybindingCommandOptions(merged),
-    allRows: buildKeybindingRows(merged),
+    allRows,
+    keyboardIndex: buildKeyboardIndex(allRows, navigator.platform),
   };
 }
 
@@ -1337,17 +1381,26 @@ export function KeybindingsSettingsPanel() {
   const [query, setQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [savingCommand, setSavingCommand] = useState<KeybindingCommand | null>(null);
-  const [isAddingBinding, setIsAddingBinding] = useState(false);
+  // null while closed; the key prefills the new row's shortcut.
+  const [newBindingKey, setNewBindingKey] = useState<string | null>(null);
+  const isAddingBinding = newBindingKey !== null;
+  const [keySelection, setKeySelection] = useState<KeyCombo | null>(null);
+  const [previewStore] = useState(createKeyboardPreviewStore);
   const searchTargetId = useLocation({ select: (location) => location.hash.replace(/^#/, "") });
   const [handledSearchTargetId, setHandledSearchTargetId] = useState(searchTargetId);
 
   if (searchTargetId !== handledSearchTargetId) {
     setHandledSearchTargetId(searchTargetId);
-    if (searchTargetId.startsWith("keybinding-")) setQuery("");
+    if (searchTargetId.startsWith("keybinding-")) {
+      setQuery("");
+      setKeySelection(null);
+    }
   }
   const whenVariables = buildWhenVariableOptions();
-  const { commandOptions, allRows } = useKeybindingCatalog();
-  const rows = filterKeybindingRows(allRows, query);
+  const { commandOptions, allRows, keyboardIndex } = useKeybindingCatalog();
+  const rows = keySelection
+    ? rowsForCombo(keyboardIndex, keySelection)
+    : filterKeybindingRows(allRows, query);
   const groups = groupKeybindingRows(rows);
   const anchorIds = keybindingAnchorIds(rows);
 
@@ -1397,7 +1450,7 @@ export function KeybindingsSettingsPanel() {
       setSavingCommand(null);
       const failed = results.find((result) => result._tag === "Failure");
       if (!failed) {
-        setIsAddingBinding(false);
+        setNewBindingKey(null);
         return;
       }
       if (!isAtomCommandInterrupted(failed)) {
@@ -1456,7 +1509,15 @@ export function KeybindingsSettingsPanel() {
     });
   };
 
-  const cancelAdd = () => setIsAddingBinding(false);
+  const cancelAdd = () => setNewBindingKey(null);
+  const changeQuery = (next: string) => {
+    setQuery(next);
+    setKeySelection(null);
+  };
+  const selectKey = (combo: KeyCombo | null) => {
+    setKeySelection(combo);
+    setQuery("");
+  };
 
   const rowActions: KeybindingRowActions = {
     allRows,
@@ -1468,17 +1529,33 @@ export function KeybindingsSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <KeybindingsKeyboardMap
+        index={keyboardIndex}
+        platform={navigator.platform}
+        isBrowser={!isElectron}
+        selection={keySelection}
+        previewStore={previewStore}
+        canAssign={canWriteSettings}
+        onSelect={selectKey}
+        onAssign={(combo) => setNewBindingKey(comboToKeybindingInput(combo, navigator.platform))}
+      />
       <SettingsSection
         {...searchableSetting("keybindings")}
-        headerAction={!isElectron ? <BrowserKeybindingNotice /> : null}
+        headerAction={
+          !isElectron ? (
+            <span className="md:hidden">
+              <BrowserKeybindingNotice />
+            </span>
+          ) : null
+        }
       >
         <div className="flex flex-wrap items-center gap-2 px-3 py-3 sm:px-4">
-          <KeybindingsSearchInput query={query} onChange={setQuery} inputRef={searchInputRef} />
+          <KeybindingsSearchInput query={query} onChange={changeQuery} inputRef={searchInputRef} />
           <Button
             type="button"
             variant="outline"
             disabled={isAddingBinding || !canWriteSettings}
-            onClick={() => setIsAddingBinding(true)}
+            onClick={() => setNewBindingKey("")}
           >
             <PlusIcon aria-hidden className="size-4" />
             Add keybinding
@@ -1510,10 +1587,16 @@ export function KeybindingsSettingsPanel() {
             : "This connection can view keybindings but cannot change them."}
         </p>
       ) : null}
-      <div inert={!canWriteSettings} className="flex flex-col gap-8">
+      <div
+        inert={!canWriteSettings}
+        className="flex flex-col gap-8"
+        {...keyboardPreviewHandlers(previewStore, keyboardIndex)}
+      >
         {isAddingBinding ? (
           <SettingsGroup>
             <NewKeybindingSettingsRow
+              key={newBindingKey}
+              initialKey={newBindingKey}
               commandOptions={commandOptions}
               allRows={allRows}
               variables={whenVariables}
