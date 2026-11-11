@@ -135,26 +135,30 @@ export const sameLayer = (left: KeyboardLayer, right: KeyboardLayer) =>
 
 const comboId = (combo: KeyCombo) => [...combo.mods, combo.key].join("+");
 
-// Shifted US glyphs ("mod++") live on their unshifted key with Shift held.
+// Shifted US glyphs ("mod+shift+?") live on their unshifted key. Without `shift` they only
+// fire from a dedicated key (numpad "+"), which the map does not draw.
 export function shortcutToCombo(shortcut: KeybindingShortcut, platform: string): KeyCombo | null {
   const unshifted = US_SHIFTED_TO_UNSHIFTED_KEYS.get(shortcut.key);
+  if (unshifted !== undefined && !shortcut.shiftKey) return null;
   const keyId = shortcut.key === " " ? "space" : (unshifted ?? shortcut.key);
   if (!MAP_KEY_IDS.has(keyId)) return null;
   const isMac = isMacPlatform(platform);
   const mods: Array<KeyboardModifier> = [];
   if (shortcut.ctrlKey || (shortcut.modKey && !isMac)) mods.push("ctrl");
   if (shortcut.altKey) mods.push("alt");
-  if (shortcut.shiftKey || unshifted !== undefined) mods.push("shift");
+  if (shortcut.shiftKey) mods.push("shift");
   if (shortcut.metaKey || (shortcut.modKey && isMac)) mods.push("meta");
   return { mods, key: keyId };
 }
+
+export type KeybindingGroupId = ReturnType<typeof keybindingGroupFor>["id"];
 
 export interface KeyboardIndex {
   readonly byCombo: ReadonlyMap<string, ReadonlyArray<KeybindingRow>>;
   readonly byKey: ReadonlyMap<string, ReadonlyArray<KeybindingRow>>;
   readonly comboByRowId: ReadonlyMap<string, KeyCombo>;
   readonly usedModifiers: ReadonlySet<KeyboardModifier>;
-  readonly groupIds: ReadonlySet<string>;
+  readonly groupIds: ReadonlySet<KeybindingGroupId>;
 }
 
 export function buildKeyboardIndex(
@@ -165,7 +169,7 @@ export function buildKeyboardIndex(
   const byKey = new Map<string, Array<KeybindingRow>>();
   const comboByRowId = new Map<string, KeyCombo>();
   const usedModifiers = new Set<KeyboardModifier>();
-  const groupIds = new Set<string>();
+  const groupIds = new Set<KeybindingGroupId>();
   const push = (map: Map<string, Array<KeybindingRow>>, id: string, row: KeybindingRow) => {
     const bucket = map.get(id);
     if (bucket) bucket.push(row);
@@ -235,13 +239,26 @@ function shortCommandLabel(command: KeybindingCommand): string {
   return parts.length > 1 && (last === "Toggle" || last === "Open") ? (parts[0] ?? last) : last;
 }
 
-export function keyCapState(input: {
+export const selectionNote = (index: KeyboardIndex, selection: KeyCombo) => {
+  const count = rowsForCombo(index, selection).length;
+  if (count > 0) {
+    const noun = count === 1 ? "binding" : "bindings";
+    return `${count} ${noun}${selection.mods.length === 0 ? " across all layers" : ""}`;
+  }
+  return isFreeCombo(index, selection)
+    ? "is free."
+    : "has no shortcut. Pick a modifier to assign one.";
+};
+
+interface KeyCapInput {
   readonly index: KeyboardIndex;
   readonly key: string;
   readonly layer: KeyboardLayer;
   readonly platform: string;
   readonly isBrowser: boolean;
-}) {
+}
+
+export function keyCapState(input: KeyCapInput) {
   const combo = { mods: input.layer, key: input.key };
   const rows = rowsForCombo(input.index, combo);
   const first = rows[0];
@@ -257,6 +274,25 @@ export function keyCapState(input: {
         ? `${label}: No shortcut`
         : `${label}: ${[...new Set(rows.map((row) => commandLabel(row.command)))].join(", ")}`,
   };
+}
+
+export type KeyCapState = ReturnType<typeof keyCapState>;
+
+const keyStateCache = new WeakMap<KeyboardIndex, Map<string, ReadonlyMap<string, KeyCapState>>>();
+
+// Cached per index and layer so hover previews reuse each layer's key states.
+export function keyStatesForLayer(input: Omit<KeyCapInput, "key">) {
+  const cacheKey = [input.platform, input.isBrowser, ...input.layer].join("+");
+  let byLayer = keyStateCache.get(input.index);
+  if (!byLayer) {
+    byLayer = new Map();
+    keyStateCache.set(input.index, byLayer);
+  }
+  const cached = byLayer.get(cacheKey);
+  if (cached) return cached;
+  const states = new Map([...MAP_KEY_IDS].map((key) => [key, keyCapState({ ...input, key })]));
+  byLayer.set(cacheKey, states);
+  return states;
 }
 
 const NAMED_CODES: Readonly<Record<string, string>> = {
@@ -290,3 +326,39 @@ export const layerFromEvent = (
           ? event.altKey
           : event.shiftKey,
   );
+
+interface KeyBox {
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+// Arrow keys move along DOM order sideways and to the nearest key above or below.
+export function nextKeyIndex(boxes: ReadonlyArray<KeyBox>, from: number, key: string) {
+  const current = boxes[from];
+  if (!current) return null;
+  if (key === "Home") return 0;
+  if (key === "End") return boxes.length - 1;
+  if (key === "ArrowLeft") return from > 0 ? from - 1 : null;
+  if (key === "ArrowRight") return from < boxes.length - 1 ? from + 1 : null;
+  if (key !== "ArrowUp" && key !== "ArrowDown") return null;
+  const down = key === "ArrowDown";
+  const bottom = (box: KeyBox) => box.top + box.height;
+  const candidates = boxes
+    .map((box, index) => ({ box, index }))
+    .filter(({ box }) => (down ? box.top >= bottom(current) - 1 : bottom(box) <= current.top + 1));
+  const nearest = candidates.reduce<KeyBox | null>((best, { box }) => {
+    if (!best) return box;
+    return (down ? box.top < best.top : bottom(box) > bottom(best)) ? box : best;
+  }, null);
+  if (!nearest) return null;
+  const center = (box: KeyBox) => box.left + box.width / 2;
+  let best: { index: number; distance: number } | null = null;
+  for (const { box, index } of candidates) {
+    const inRow = down ? box.top < bottom(nearest) : bottom(box) > nearest.top;
+    const distance = Math.abs(center(box) - center(current));
+    if (inRow && (!best || distance < best.distance)) best = { index, distance };
+  }
+  return best?.index ?? null;
+}

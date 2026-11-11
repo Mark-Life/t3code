@@ -11,6 +11,7 @@ import {
   isFreeCombo,
   keyboardLayout,
   keyCapState,
+  nextKeyIndex,
   rowsForCombo,
   shortcutToCombo,
 } from "./KeybindingsKeyboardMap.logic";
@@ -32,7 +33,7 @@ describe("shortcutToCombo", () => {
     ["meta+k", LINUX, { mods: ["meta"], key: "k" }],
     ["ctrl+k", MAC, { mods: ["ctrl"], key: "k" }],
     ["mod+shift+alt+arrowup", MAC, { mods: ["alt", "shift", "meta"], key: "arrowup" }],
-    ["mod++", MAC, { mods: ["shift", "meta"], key: "=" }],
+    ["mod+shift+?", MAC, { mods: ["shift", "meta"], key: "/" }],
     ["space", MAC, { mods: [], key: "space" }],
     ["esc", LINUX, { mods: [], key: "escape" }],
     ["shift+f6", MAC, { mods: ["shift"], key: "f6" }],
@@ -40,8 +41,8 @@ describe("shortcutToCombo", () => {
     expect(combo(value, platform)).toEqual(expected);
   });
 
-  it("skips keys the drawn keyboard does not have", () => {
-    expect(combo("mod+pagedown", MAC)).toBeNull();
+  it.each(["mod+pagedown", "mod++"])("skips %s, which no drawn key can type", (value) => {
+    expect(combo(value, MAC)).toBeNull();
   });
 });
 
@@ -127,5 +128,24 @@ describe("comboToKeybindingInput", () => {
   ] as const)("writes %o on %s as %s", (value, platform, expected) => {
     expect(comboToKeybindingInput(value, platform)).toBe(expected);
     expect(combo(expected, platform)).toEqual(value);
+  });
+});
+
+describe("nextKeyIndex", () => {
+  const box = (left: number, top: number, height = 36) => ({ left, top, width: 36, height });
+  // A key above a row holding a short stacked pair of arrows.
+  const boxes = [box(80, 0), box(0, 40), box(40, 40, 16), box(40, 60, 16), box(80, 40)];
+
+  it.each([
+    [0, "ArrowDown", 4],
+    [2, "ArrowDown", 3],
+    [3, "ArrowUp", 2],
+    [1, "ArrowUp", 0],
+    [0, "ArrowLeft", null],
+    [1, "ArrowRight", 2],
+    [4, "End", 4],
+    [0, "ArrowUp", null],
+  ] as const)("moves from %i with %s to %s", (from, key, expected) => {
+    expect(nextKeyIndex(boxes, from, key)).toBe(expected);
   });
 });

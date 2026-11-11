@@ -39,6 +39,7 @@ import {
 
 import { isElectron } from "../../env";
 import { useOpenInPreferredEditor } from "../../editorPreferences";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { formatShortcutLabel } from "../../keybindings";
 import { cn } from "../../lib/utils";
 import { serverEnvironment } from "../../state/server";
@@ -1384,7 +1385,10 @@ export function KeybindingsSettingsPanel() {
   // null while closed; the key prefills the new row's shortcut.
   const [newBindingKey, setNewBindingKey] = useState<string | null>(null);
   const isAddingBinding = newBindingKey !== null;
-  const [keySelection, setKeySelection] = useState<KeyCombo | null>(null);
+  const showKeyboardMap = useMediaQuery("md");
+  const [selectedCombo, setKeySelection] = useState<KeyCombo | null>(null);
+  // The map holds the only control that clears this filter, so it applies only while shown.
+  const keySelection = showKeyboardMap ? selectedCombo : null;
   const [previewStore] = useState(createKeyboardPreviewStore);
   const searchTargetId = useLocation({ select: (location) => location.hash.replace(/^#/, "") });
   const [handledSearchTargetId, setHandledSearchTargetId] = useState(searchTargetId);
@@ -1529,25 +1533,21 @@ export function KeybindingsSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <KeybindingsKeyboardMap
-        index={keyboardIndex}
-        platform={navigator.platform}
-        isBrowser={!isElectron}
-        selection={keySelection}
-        previewStore={previewStore}
-        canAssign={canWriteSettings}
-        onSelect={selectKey}
-        onAssign={(combo) => setNewBindingKey(comboToKeybindingInput(combo, navigator.platform))}
-      />
+      {showKeyboardMap ? (
+        <KeybindingsKeyboardMap
+          index={keyboardIndex}
+          platform={navigator.platform}
+          isBrowser={!isElectron}
+          selection={keySelection}
+          previewStore={previewStore}
+          canAssign={canWriteSettings}
+          onSelect={selectKey}
+          onAssign={(combo) => setNewBindingKey(comboToKeybindingInput(combo, navigator.platform))}
+        />
+      ) : null}
       <SettingsSection
         {...searchableSetting("keybindings")}
-        headerAction={
-          !isElectron ? (
-            <span className="md:hidden">
-              <BrowserKeybindingNotice />
-            </span>
-          ) : null
-        }
+        headerAction={!isElectron && !showKeyboardMap ? <BrowserKeybindingNotice /> : null}
       >
         <div className="flex flex-wrap items-center gap-2 px-3 py-3 sm:px-4">
           <KeybindingsSearchInput query={query} onChange={changeQuery} inputRef={searchInputRef} />

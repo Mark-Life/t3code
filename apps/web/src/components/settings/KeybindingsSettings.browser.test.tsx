@@ -152,7 +152,10 @@ describe("keyboard map", () => {
 
     await expect.element(terminalPill).toBeVisible();
     await expect.element(existingPill).not.toBeInTheDocument();
-    await expect.element(page.getByText(/across all layers/)).toBeVisible();
+    await expect
+      .element(page.getByText("2 bindings across all layers", { exact: true }))
+      .toBeVisible();
+    await expect.element(page.getByText("J 2 bindings across all layers")).toBeInTheDocument();
 
     await page.getByRole("button", { name: "Clear key filter" }).click();
     await expect.element(existingPill).toBeVisible();

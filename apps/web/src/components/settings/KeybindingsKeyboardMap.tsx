@@ -1,5 +1,12 @@
 import { XIcon } from "lucide-react";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import {
+  memo,
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import { cn, isMacPlatform } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -7,13 +14,16 @@ import {
   comboLabel,
   isFreeCombo,
   keyboardLayout,
-  keyCapState,
   keyIdFromCode,
+  keyStatesForLayer,
   layerLabel,
   layerFromEvent,
+  nextKeyIndex,
   normalizeLayer,
-  rowsForCombo,
   sameLayer,
+  selectionNote,
+  type KeybindingGroupId,
+  type KeyCapState,
   type KeyboardIndex,
   type KeyboardLayer,
   type KeyboardModifier,
@@ -44,7 +54,7 @@ export function createKeyboardPreviewStore() {
 
 export type KeyboardPreviewStore = ReturnType<typeof createKeyboardPreviewStore>;
 
-const GROUP_TINTS: Readonly<Record<string, string>> = {
+const GROUP_TINTS = {
   navigation: "[--key-tint:var(--info)]",
   threads: "[--key-tint:var(--guest)]",
   composer: "[--key-tint:var(--success)]",
@@ -53,7 +63,7 @@ const GROUP_TINTS: Readonly<Record<string, string>> = {
   appearance: "[--key-tint:var(--color-yellow-500)]",
   scripts: "[--key-tint:var(--color-teal-500)]",
   other: "[--key-tint:var(--muted-foreground)]",
-};
+} satisfies Record<KeybindingGroupId, string>;
 
 const HATCH_STYLE = {
   backgroundImage:
@@ -80,6 +90,9 @@ const sameHeld = (left: HeldKeys, right: HeldKeys) =>
   left.recording === right.recording &&
   sameLayer(left.layer, right.layer);
 
+const isInCapture = (target: EventTarget | null) =>
+  target instanceof Element && target.closest("[data-keybinding-capture]") !== null;
+
 function useHeldKeys() {
   const [held, setHeld] = useState(NO_HELD_KEYS);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mirrors physical keys held anywhere on the window
@@ -87,22 +100,32 @@ function useHeldKeys() {
     const update = (next: HeldKeys) =>
       setHeld((current) => (sameHeld(current, next) ? current : next));
     const onKey = (event: KeyboardEvent) => {
+      const recording = isInCapture(event.target);
       const target = event.target instanceof Element ? event.target : null;
-      const recording = Boolean(target?.closest("[data-keybinding-capture]"));
       if (!recording && target?.closest("input, textarea, select, [contenteditable='true']")) {
         update(NO_HELD_KEYS);
         return;
       }
-      const key = event.type === "keydown" ? keyIdFromCode(event.code) : null;
+      const key = recording && event.type === "keydown" ? keyIdFromCode(event.code) : null;
       update({ layer: layerFromEvent(event), key, recording });
     };
+    // Focus can leave the recorder by mouse, which fires no key event.
+    const onFocus = (event: FocusEvent) =>
+      update({
+        ...NO_HELD_KEYS,
+        recording: isInCapture(event.type === "focusin" ? event.target : event.relatedTarget),
+      });
     const reset = () => update(NO_HELD_KEYS);
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("keyup", onKey, true);
+    window.addEventListener("focusin", onFocus);
+    window.addEventListener("focusout", onFocus);
     window.addEventListener("blur", reset);
     return () => {
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("keyup", onKey, true);
+      window.removeEventListener("focusin", onFocus);
+      window.removeEventListener("focusout", onFocus);
       window.removeEventListener("blur", reset);
     };
   }, []);
@@ -111,105 +134,133 @@ function useHeldKeys() {
 
 const KEY_BASE =
   "relative flex h-9 min-w-0 flex-col items-center justify-center overflow-hidden rounded-md border px-0.5 text-xs leading-none";
+const KEY_FOCUS =
+  "outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
+const KEY_FILLED = "bg-primary text-primary-foreground focus-visible:ring-primary-foreground";
 
-interface KeyHighlight {
-  readonly layer: KeyboardLayer;
-  readonly lit: { readonly key: string | null; readonly mods: KeyboardLayer } | null;
-  readonly selectedKey: string | null;
-}
-
-function MapKey({
+const MapKey = memo(function MapKey({
   cap,
-  index,
-  platform,
-  isBrowser,
-  highlight,
+  state,
+  isLit,
+  isSelected,
+  isDimmed,
+  isTabStop,
   onPress,
 }: {
   cap: Extract<KeyCap, { kind: "key" }>;
-  index: KeyboardIndex;
-  platform: string;
-  isBrowser: boolean;
-  highlight: KeyHighlight;
+  state: KeyCapState | undefined;
+  isLit: boolean;
+  isSelected: boolean;
+  isDimmed: boolean;
+  isTabStop: boolean;
   onPress: (key: string) => void;
 }) {
-  const state = keyCapState({ index, key: cap.id, layer: highlight.layer, platform, isBrowser });
-  const isLit = highlight.lit?.key === cap.id || highlight.selectedKey === cap.id;
-  const isDimmed = highlight.lit !== null && !isLit;
   return (
     <button
       type="button"
-      aria-label={state.ariaLabel}
+      data-nav-id={cap.id}
+      tabIndex={isTabStop ? 0 : -1}
+      aria-pressed={isSelected}
+      aria-label={state?.ariaLabel ?? cap.label}
       onClick={() => onPress(cap.id)}
+      onContextMenu={(event) => {
+        // macOS turns Ctrl+click into a context menu click, so `click` never fires.
+        if (!event.ctrlKey || event.button !== 0) return;
+        event.preventDefault();
+        onPress(cap.id);
+      }}
       className={cn(
         KEY_BASE,
-        "outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-        state.groupId
-          ? `${GROUP_TINTS[state.groupId] ?? GROUP_TINTS.other} border-(--key-tint) bg-(--key-tint)/15 font-semibold text-foreground`
+        KEY_FOCUS,
+        state?.groupId
+          ? `${GROUP_TINTS[state.groupId]} border-(--key-tint) bg-(--key-tint)/15 font-semibold text-foreground`
           : "border-border text-muted-foreground",
-        isLit && "border-primary bg-primary text-primary-foreground",
+        (isLit || isSelected) && `border-primary ${KEY_FILLED}`,
         isDimmed && "opacity-30",
       )}
     >
-      {state.reserved ? (
+      {state?.reserved ? (
         <span aria-hidden style={HATCH_STYLE} className="pointer-events-none absolute inset-0" />
       ) : null}
       <span className="relative">{cap.label}</span>
-      {state.caption ? (
+      {state?.caption ? (
         <span className="relative mt-0.5 max-w-full truncate text-4xs font-normal opacity-80">
           {state.caption}
         </span>
       ) : null}
-      {state.rows.length > 1 ? (
+      {state && state.rows.length > 1 ? (
         <span className="absolute top-0.5 right-1 text-4xs font-semibold opacity-70">
           {state.rows.length}
         </span>
       ) : null}
     </button>
   );
-}
+});
 
-function ModifierKey({
+const ModifierKey = memo(function ModifierKey({
   cap,
+  navId,
   platform,
   isUsed,
   isOn,
   isLit,
   isDimmed,
+  isTabStop,
   onToggle,
 }: {
   cap: Extract<KeyCap, { kind: "modifier" }>;
+  navId: string;
   platform: string;
   isUsed: boolean;
   isOn: boolean;
   isLit: boolean;
   isDimmed: boolean;
+  isTabStop: boolean;
   onToggle: (mod: KeyboardModifier) => void;
 }) {
   const names = MODIFIER_NAMES[cap.modifier];
   return (
     <button
       type="button"
+      data-nav-id={navId}
+      tabIndex={isTabStop ? 0 : -1}
       aria-pressed={isOn}
       aria-label={isMacPlatform(platform) ? names[0] : names[1]}
       onClick={() => onToggle(cap.modifier)}
       className={cn(
         KEY_BASE,
-        "outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+        KEY_FOCUS,
         isUsed ? "border-primary text-foreground" : "border-border text-muted-foreground",
-        (isOn || isLit) && "bg-primary text-primary-foreground",
+        (isOn || isLit) && KEY_FILLED,
         isDimmed && "opacity-30",
       )}
     >
       {cap.label}
     </button>
   );
-}
+});
 
 const keyWidthStyle = (width: number) => ({
   flexGrow: width,
   flexBasis: `calc(${width - 1} * var(--spacing))`,
 });
+
+const moveKeyFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+  const buttons = [...event.currentTarget.querySelectorAll<HTMLElement>("[data-nav-id]")];
+  const from = buttons.findIndex((button) => button === event.target);
+  const next =
+    buttons[
+      nextKeyIndex(
+        buttons.map((button) => button.getBoundingClientRect()),
+        from,
+        event.key,
+      ) ?? -1
+    ];
+  if (!next) return;
+  event.preventDefault();
+  next.focus();
+};
 
 export function KeybindingsKeyboardMap({
   index,
@@ -231,21 +282,18 @@ export function KeybindingsKeyboardMap({
   onAssign: (combo: KeyCombo) => void;
 }) {
   const [latched, setLatched] = useState<KeyboardLayer>([]);
+  const [tabStop, setTabStop] = useState("escape");
   const held = useHeldKeys();
   const preview = useSyncExternalStore(previewStore.subscribe, previewStore.get);
-  const recordingLit = held.recording ? { key: held.key, mods: held.layer } : null;
+  const recordingLit =
+    held.recording && (held.key !== null || held.layer.length > 0)
+      ? { key: held.key, mods: held.layer }
+      : null;
   const lit = recordingLit ?? preview;
-  const layer =
-    recordingLit === null && preview
-      ? preview.mods
-      : held.recording
-        ? latched
-        : normalizeLayer([...latched, ...held.layer]);
-  const highlight: KeyHighlight = {
-    layer,
-    lit,
-    selectedKey: selection && sameLayer(selection.mods, layer) ? selection.key : null,
-  };
+  const baseLayer = held.recording ? latched : normalizeLayer([...latched, ...held.layer]);
+  const layer = recordingLit === null && preview ? preview.mods : baseLayer;
+  const keyStates = keyStatesForLayer({ index, layer, platform, isBrowser });
+  const selectedKey = selection && sameLayer(selection.mods, layer) ? selection.key : null;
 
   const toggleModifier = (mod: KeyboardModifier) => {
     const next = latched.includes(mod)
@@ -254,12 +302,14 @@ export function KeybindingsKeyboardMap({
     setLatched(next);
     if (selection) onSelect({ mods: next, key: selection.key });
   };
+  // Held modifiers get latched so the selection stays visible after they are released.
   const pressKey = (key: string) => {
-    const combo = { mods: layer, key };
-    onSelect(selection?.key === key && sameLayer(selection.mods, layer) ? null : combo);
+    setLatched(baseLayer);
+    const isSame = selection?.key === key && sameLayer(selection.mods, baseLayer);
+    onSelect(isSame ? null : { mods: baseLayer, key });
   };
 
-  const renderCap = (cap: KeyCap, position: number) => {
+  const renderCap = (cap: KeyCap, position: number, rowIndex: number): ReactNode => {
     const style = keyWidthStyle(cap.width);
     switch (cap.kind) {
       case "fixed":
@@ -276,52 +326,72 @@ export function KeybindingsKeyboardMap({
       case "stack":
         return (
           <div key={position} style={style} className="flex min-w-0 flex-col gap-1 [&_button]:h-4">
-            {cap.keys.map(renderCap)}
+            {cap.keys.map((inner, innerPosition) => renderCap(inner, innerPosition, rowIndex))}
           </div>
         );
-      case "modifier":
+      case "modifier": {
+        const navId = `${cap.modifier}-${rowIndex}-${position}`;
         return (
           <div key={position} style={style} className="flex min-w-0 *:w-full">
             <ModifierKey
               cap={cap}
+              navId={navId}
               platform={platform}
               isUsed={index.usedModifiers.has(cap.modifier)}
               isOn={layer.includes(cap.modifier)}
               isLit={lit?.mods.includes(cap.modifier) ?? false}
               isDimmed={lit !== null && !lit.mods.includes(cap.modifier)}
+              isTabStop={tabStop === navId}
               onToggle={toggleModifier}
             />
           </div>
         );
-      case "key":
+      }
+      case "key": {
+        const isLit = lit?.key === cap.id;
+        const isSelected = selectedKey === cap.id;
         return (
           <div key={position} style={style} className="flex min-w-0 *:w-full">
             <MapKey
               cap={cap}
-              index={index}
-              platform={platform}
-              isBrowser={isBrowser}
-              highlight={highlight}
+              state={keyStates.get(cap.id)}
+              isLit={isLit}
+              isSelected={isSelected}
+              isDimmed={lit !== null && !isLit && !isSelected}
+              isTabStop={tabStop === cap.id}
               onPress={pressKey}
             />
           </div>
         );
+      }
     }
   };
 
   return (
-    <div className="sticky top-0 z-10 hidden bg-background pb-2 md:block">
+    <div className="top-(--workspace-titlebar-scroll-fade-height) z-10 bg-background pb-2 [@media(min-height:45rem)]:sticky">
       <div className="rounded-xl border border-border bg-card p-3">
-        <div role="group" aria-label="Keyboard map" className="flex flex-col gap-1">
+        <div
+          role="group"
+          aria-label="Keyboard map"
+          className="flex flex-col gap-1"
+          onKeyDown={moveKeyFocus}
+          onFocus={(event) => {
+            const navId = event.target instanceof HTMLElement ? event.target.dataset.navId : null;
+            if (navId) setTabStop(navId);
+          }}
+        >
           {keyboardLayout(platform).map((row, rowIndex) => (
             // oxlint-disable-next-line react/no-array-index-key -- the layout is static
             <div key={rowIndex} className="flex gap-1">
-              {row.map(renderCap)}
+              {row.map((cap, position) => renderCap(cap, position, rowIndex))}
             </div>
           ))}
         </div>
         <KeyboardLegend index={index} platform={platform} isBrowser={isBrowser} layer={layer} />
       </div>
+      <p role="status" className="sr-only">
+        {selection ? `${comboLabel(selection, platform)} ${selectionNote(index, selection)}` : ""}
+      </p>
       {selection ? (
         <KeyboardSelectionBar
           index={index}
@@ -354,7 +424,7 @@ function KeyboardLegend({
         <span key={group.id} className="inline-flex items-center gap-1.5">
           <span
             aria-hidden
-            className={`size-2 rounded-xs bg-(--key-tint) ${GROUP_TINTS[group.id] ?? GROUP_TINTS.other}`}
+            className={`size-2 rounded-xs bg-(--key-tint) ${GROUP_TINTS[group.id]}`}
           />
           {group.title}
         </span>
@@ -391,17 +461,10 @@ function KeyboardSelectionBar({
   onClear: () => void;
   onAssign: (combo: KeyCombo) => void;
 }) {
-  const count = rowsForCombo(index, selection).length;
-  const note =
-    count > 0
-      ? `${count} ${count === 1 ? "binding" : "bindings"}${selection.mods.length === 0 ? " across all layers" : ""}`
-      : isFreeCombo(index, selection)
-        ? "is free."
-        : "has no shortcut. Pick a modifier to assign one.";
   return (
     <div className="mt-2 flex min-h-10 items-center gap-2.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs">
       <span className="font-mono text-sm font-semibold">{comboLabel(selection, platform)}</span>
-      <span className="text-muted-foreground">{note}</span>
+      <span className="text-muted-foreground">{selectionNote(index, selection)}</span>
       {isFreeCombo(index, selection) ? (
         <Button size="compact" disabled={!canAssign} onClick={() => onAssign(selection)}>
           Assign
