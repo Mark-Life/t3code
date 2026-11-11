@@ -2,12 +2,14 @@ import { XIcon } from "lucide-react";
 import {
   memo,
   useEffect,
+  useRef,
   useState,
   useSyncExternalStore,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 
+import { observeResize } from "../../lib/observeResize";
 import { cn, isMacPlatform } from "../../lib/utils";
 import { Button } from "../ui/button";
 import {
@@ -93,6 +95,10 @@ const sameHeld = (left: HeldKeys, right: HeldKeys) =>
 const isInCapture = (target: EventTarget | null) =>
   target instanceof Element && target.closest("[data-keybinding-capture]") !== null;
 
+const isTextField = (target: EventTarget | null) =>
+  target instanceof Element &&
+  target.closest("input, textarea, select, [contenteditable='true']") !== null;
+
 function useHeldKeys() {
   const [held, setHeld] = useState(NO_HELD_KEYS);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mirrors physical keys held anywhere on the window
@@ -101,20 +107,26 @@ function useHeldKeys() {
       setHeld((current) => (sameHeld(current, next) ? current : next));
     const onKey = (event: KeyboardEvent) => {
       const recording = isInCapture(event.target);
-      const target = event.target instanceof Element ? event.target : null;
-      if (!recording && target?.closest("input, textarea, select, [contenteditable='true']")) {
+      if (!recording && isTextField(event.target)) {
         update(NO_HELD_KEYS);
         return;
       }
       const key = recording && event.type === "keydown" ? keyIdFromCode(event.code) : null;
       update({ layer: layerFromEvent(event), key, recording });
     };
-    // Focus can leave the recorder by mouse, which fires no key event.
-    const onFocus = (event: FocusEvent) =>
-      update({
-        ...NO_HELD_KEYS,
-        recording: isInCapture(event.type === "focusin" ? event.target : event.relatedTarget),
+    // Focus can leave the recorder by mouse, which fires no key event. Held modifiers stay:
+    // clicking a key focuses it while Cmd is still down.
+    const onFocus = (event: FocusEvent) => {
+      const target = event.type === "focusin" ? event.target : event.relatedTarget;
+      const recording = isInCapture(target);
+      setHeld((current) => {
+        const next =
+          !recording && isTextField(target)
+            ? NO_HELD_KEYS
+            : { layer: current.layer, key: recording ? current.key : null, recording };
+        return sameHeld(current, next) ? current : next;
       });
+    };
     const reset = () => update(NO_HELD_KEYS);
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("keyup", onKey, true);
@@ -240,6 +252,27 @@ const ModifierKey = memo(function ModifierKey({
   );
 });
 
+const STICKY_MEDIA_QUERY = "(min-height: 45rem)";
+
+// Pads the scroll area by the sticky map's height so focused rows never land under it.
+const padScrollAreaForMap = (node: HTMLDivElement) => {
+  const scrollArea = node.closest<HTMLElement>("[data-settings-page-scroll]");
+  if (!scrollArea) return;
+  const media = window.matchMedia(STICKY_MEDIA_QUERY);
+  const update = () => {
+    scrollArea.style.scrollPaddingTop = media.matches
+      ? `calc(var(--workspace-titlebar-scroll-fade-height) + ${node.offsetHeight}px)`
+      : "";
+  };
+  const stopObserving = observeResize(node, update);
+  media.addEventListener("change", update);
+  return () => {
+    stopObserving();
+    media.removeEventListener("change", update);
+    scrollArea.style.scrollPaddingTop = "";
+  };
+};
+
 const keyWidthStyle = (width: number) => ({
   flexGrow: width,
   flexBasis: `calc(${width - 1} * var(--spacing))`,
@@ -284,6 +317,7 @@ export function KeybindingsKeyboardMap({
   const [latched, setLatched] = useState<KeyboardLayer>([]);
   const [tabStop, setTabStop] = useState("escape");
   const held = useHeldKeys();
+  const keysRef = useRef<HTMLDivElement>(null);
   const preview = useSyncExternalStore(previewStore.subscribe, previewStore.get);
   const recordingLit =
     held.recording && (held.key !== null || held.layer.length > 0)
@@ -368,9 +402,13 @@ export function KeybindingsKeyboardMap({
   };
 
   return (
-    <div className="top-(--workspace-titlebar-scroll-fade-height) z-10 bg-background pb-2 [@media(min-height:45rem)]:sticky">
+    <div
+      ref={padScrollAreaForMap}
+      className="top-(--workspace-titlebar-scroll-fade-height) z-10 bg-background pb-2 [@media(min-height:45rem)]:sticky"
+    >
       <div className="rounded-xl border border-border bg-card p-3">
         <div
+          ref={keysRef}
           role="group"
           aria-label="Keyboard map"
           className="flex flex-col gap-1"
@@ -398,7 +436,13 @@ export function KeybindingsKeyboardMap({
           platform={platform}
           selection={selection}
           canAssign={canAssign}
-          onClear={() => onSelect(null)}
+          onClear={() => {
+            // The bar unmounts on clear, so hand focus back to the key it described.
+            keysRef.current
+              ?.querySelector<HTMLElement>(`[data-nav-id="${CSS.escape(selection.key)}"]`)
+              ?.focus();
+            onSelect(null);
+          }}
           onAssign={onAssign}
         />
       ) : null}

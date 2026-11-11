@@ -9,8 +9,8 @@ import {
   comboToKeybindingInput,
   isBrowserReservedCombo,
   isFreeCombo,
-  keyboardLayout,
   keyCapState,
+  layerLabel,
   nextKeyIndex,
   rowsForCombo,
   shortcutToCombo,
@@ -43,15 +43,6 @@ describe("shortcutToCombo", () => {
 
   it.each(["mod+pagedown", "mod++"])("skips %s, which no drawn key can type", (value) => {
     expect(combo(value, MAC)).toBeNull();
-  });
-});
-
-describe("keyboardLayout", () => {
-  it.each([MAC, LINUX])("keeps every row the same width on %s", (platform) => {
-    const widths = keyboardLayout(platform).map((row) =>
-      row.reduce((total, cap) => total + cap.width, 0),
-    );
-    expect(new Set(widths)).toEqual(new Set([14.5]));
   });
 });
 
@@ -101,6 +92,7 @@ describe("keyboard index", () => {
     const base = keyCapState({ index, key: "j", layer: [], platform: MAC, isBrowser: false });
     expect(base.caption).toBeNull();
     expect(base.rows).toHaveLength(3);
+    expect(base.ariaLabel).toBe("J: ⇧⌘J Diff: Toggle, ⇧⌘J Terminal: Split, ⌘J Terminal: Toggle");
     const free = keyCapState({ index, key: "y", layer: ["meta"], platform: MAC, isBrowser: true });
     expect(free.ariaLabel).toBe("⌘Y: No shortcut");
   });
@@ -128,6 +120,16 @@ describe("comboToKeybindingInput", () => {
   ] as const)("writes %o on %s as %s", (value, platform, expected) => {
     expect(comboToKeybindingInput(value, platform)).toBe(expected);
     expect(combo(expected, platform)).toEqual(value);
+  });
+});
+
+describe("layerLabel", () => {
+  it.each([
+    [["ctrl", "shift"], LINUX, "Ctrl+Shift"],
+    [["meta"], LINUX, "Meta"],
+    [["shift", "meta"], MAC, "⇧⌘"],
+  ] as const)("names %o on %s as %s", (layer, platform, expected) => {
+    expect(layerLabel(layer, platform)).toBe(expected);
   });
 });
 

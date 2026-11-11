@@ -159,6 +159,17 @@ describe("keyboard map", () => {
 
     await page.getByRole("button", { name: "Clear key filter" }).click();
     await expect.element(existingPill).toBeVisible();
+    await expect.element(page.getByRole("button", { name: /^J: / })).toHaveFocus();
+  });
+
+  it("selects the held modifier combo when a key is clicked", async () => {
+    await using _panel = await renderWideMacPanel();
+
+    await userEvent.keyboard("{Meta>}");
+    await page.getByRole("button", { name: /^⌘J: / }).click();
+    await userEvent.keyboard("{/Meta}");
+
+    await expect.element(page.getByText("⌘J 1 binding", { exact: true })).toBeInTheDocument();
   });
 
   it("opens the new keybinding row prefilled with a free combo", async () => {
@@ -170,5 +181,6 @@ describe("keyboard map", () => {
     await page.getByRole("button", { name: "Assign" }).click();
 
     await expect.element(newField).toHaveValue("mod+y");
+    await expect.element(page.getByRole("button", { name: "Assign" })).toBeDisabled();
   });
 });

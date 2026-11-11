@@ -6,7 +6,12 @@ import {
 
 import { formatShortcutLabel } from "../../keybindings";
 import { isMacPlatform } from "../../lib/utils";
-import { commandLabel, keybindingGroupFor, type KeybindingRow } from "./KeybindingsSettings.logic";
+import {
+  commandLabel,
+  keybindingGroupFor,
+  shortcutToKeybindingInput,
+  type KeybindingRow,
+} from "./KeybindingsSettings.logic";
 
 const KEYBOARD_MODIFIERS = ["ctrl", "alt", "shift", "meta"] as const;
 export type KeyboardModifier = (typeof KEYBOARD_MODIFIERS)[number];
@@ -68,17 +73,12 @@ const OTHER_MODIFIER_LABELS: Readonly<Record<KeyboardModifier, string>> = {
   meta: "Win",
 };
 
-const modifierLabel = (mod: KeyboardModifier, platform: string) =>
-  (isMacPlatform(platform) ? MAC_MODIFIER_LABELS : OTHER_MODIFIER_LABELS)[mod];
-
-export const layerLabel = (layer: KeyboardLayer, platform: string) =>
-  layer.map((mod) => modifierLabel(mod, platform)).join(isMacPlatform(platform) ? "" : "+");
-
 // Every row adds up to 14.5 key units so the edges line up.
-export function keyboardLayout(platform: string): ReadonlyArray<ReadonlyArray<KeyCap>> {
-  const label = (mod: KeyboardModifier) => modifierLabel(mod, platform);
+function buildLayout(isMac: boolean): ReadonlyArray<ReadonlyArray<KeyCap>> {
+  const label = (mod: KeyboardModifier) =>
+    (isMac ? MAC_MODIFIER_LABELS : OTHER_MODIFIER_LABELS)[mod];
   const arrows: KeyCap = { kind: "stack", keys: [key("arrowup"), key("arrowdown")], width: 1 };
-  const bottomRow = isMacPlatform(platform)
+  const bottomRow = isMac
     ? [
         fixed("fn"),
         modifier("ctrl", label("ctrl")),
@@ -118,9 +118,15 @@ export function keyboardLayout(platform: string): ReadonlyArray<ReadonlyArray<Ke
   ];
 }
 
+// Built once so memoized keys keep the same `cap` objects across renders.
+const MAC_LAYOUT = buildLayout(true);
+const OTHER_LAYOUT = buildLayout(false);
+
+export const keyboardLayout = (platform: string) =>
+  isMacPlatform(platform) ? MAC_LAYOUT : OTHER_LAYOUT;
+
 const MAP_KEY_IDS: ReadonlySet<string> = new Set(
-  keyboardLayout("MacIntel")
-    .flat()
+  MAC_LAYOUT.flat()
     .flatMap((cap) => (cap.kind === "stack" ? cap.keys : [cap]))
     .flatMap((cap) => (cap.kind === "key" ? [cap.id] : [])),
 );
@@ -206,32 +212,29 @@ export function isBrowserReservedCombo(combo: KeyCombo, platform: string) {
   return false;
 }
 
-function comboToShortcut(combo: KeyCombo): KeybindingShortcut {
+// The platform's primary modifier becomes `mod`, as the shortcut recorder writes it.
+function comboToShortcut(combo: KeyCombo, platform: string): KeybindingShortcut {
+  const primary: KeyboardModifier = isMacPlatform(platform) ? "meta" : "ctrl";
+  const has = (mod: KeyboardModifier) => mod !== primary && combo.mods.includes(mod);
   return {
     key: combo.key === "space" ? " " : combo.key,
-    metaKey: combo.mods.includes("meta"),
-    ctrlKey: combo.mods.includes("ctrl"),
-    altKey: combo.mods.includes("alt"),
-    shiftKey: combo.mods.includes("shift"),
-    modKey: false,
+    metaKey: has("meta"),
+    ctrlKey: has("ctrl"),
+    altKey: has("alt"),
+    shiftKey: has("shift"),
+    modKey: combo.mods.includes(primary),
   };
 }
 
 export const comboLabel = (combo: KeyCombo, platform: string) =>
-  formatShortcutLabel(comboToShortcut(combo), platform);
+  formatShortcutLabel(comboToShortcut(combo, platform), platform);
 
-// Same token order the shortcut recorder writes, so saved keys round-trip.
-export function comboToKeybindingInput(combo: KeyCombo, platform: string): string {
-  const isMac = isMacPlatform(platform);
-  const has = (mod: KeyboardModifier) => combo.mods.includes(mod);
-  const parts: Array<string> = [];
-  if (has(isMac ? "meta" : "ctrl")) parts.push("mod");
-  if (has(isMac ? "ctrl" : "meta")) parts.push(isMac ? "ctrl" : "meta");
-  if (has("alt")) parts.push("alt");
-  if (has("shift")) parts.push("shift");
-  parts.push(combo.key === "escape" ? "esc" : combo.key);
-  return parts.join("+");
-}
+// An empty key leaves a trailing "+" on non-mac platforms.
+export const layerLabel = (layer: KeyboardLayer, platform: string) =>
+  comboLabel({ mods: layer, key: "" }, platform).replace(/\+$/, "");
+
+export const comboToKeybindingInput = (combo: KeyCombo, platform: string) =>
+  shortcutToKeybindingInput(comboToShortcut(combo, platform));
 
 function shortCommandLabel(command: KeybindingCommand): string {
   const parts = commandLabel(command).split(": ");
@@ -263,6 +266,12 @@ export function keyCapState(input: KeyCapInput) {
   const rows = rowsForCombo(input.index, combo);
   const first = rows[0];
   const label = comboLabel(combo, input.platform);
+  // The base layer mixes layers, so each command names its own combo.
+  const describeRow = (row: KeybindingRow) => {
+    const own = input.layer.length === 0 ? input.index.comboByRowId.get(row.id) : undefined;
+    const name = commandLabel(row.command);
+    return own ? `${comboLabel(own, input.platform)} ${name}` : name;
+  };
   return {
     rows,
     groupId: first ? keybindingGroupFor(first.command).id : null,
@@ -272,7 +281,7 @@ export function keyCapState(input: KeyCapInput) {
     ariaLabel:
       rows.length === 0
         ? `${label}: No shortcut`
-        : `${label}: ${[...new Set(rows.map((row) => commandLabel(row.command)))].join(", ")}`,
+        : `${label}: ${[...new Set(rows.map(describeRow))].join(", ")}`,
   };
 }
 

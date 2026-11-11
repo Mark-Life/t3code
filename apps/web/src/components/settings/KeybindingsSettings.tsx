@@ -1540,7 +1540,7 @@ export function KeybindingsSettingsPanel() {
           isBrowser={!isElectron}
           selection={keySelection}
           previewStore={previewStore}
-          canAssign={canWriteSettings}
+          canAssign={canWriteSettings && !isAddingBinding}
           onSelect={selectKey}
           onAssign={(combo) => setNewBindingKey(comboToKeybindingInput(combo, navigator.platform))}
         />

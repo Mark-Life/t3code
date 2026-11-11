@@ -222,9 +222,7 @@ const KEYBINDING_GROUPS = [
   { id: "scripts", title: "Project scripts", prefixes: ["script"] },
 ] as const;
 const OTHER_KEYBINDING_GROUP = { id: "other", title: "Other" } as const;
-export const KEYBINDING_GROUP_ORDER = [...KEYBINDING_GROUPS, OTHER_KEYBINDING_GROUP].map(
-  ({ id, title }) => ({ id, title }),
-);
+export const KEYBINDING_GROUP_ORDER = [...KEYBINDING_GROUPS, OTHER_KEYBINDING_GROUP] as const;
 
 export function keybindingGroupFor(command: KeybindingCommand) {
   const prefix = String(command).split(".")[0] ?? "";
