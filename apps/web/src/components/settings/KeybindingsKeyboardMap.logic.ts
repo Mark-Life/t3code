@@ -164,7 +164,6 @@ export interface KeyboardIndex {
   readonly byKey: ReadonlyMap<string, ReadonlyArray<KeybindingRow>>;
   readonly comboByRowId: ReadonlyMap<string, KeyCombo>;
   readonly usedModifiers: ReadonlySet<KeyboardModifier>;
-  readonly groupIds: ReadonlySet<KeybindingGroupId>;
 }
 
 export function buildKeyboardIndex(
@@ -175,7 +174,6 @@ export function buildKeyboardIndex(
   const byKey = new Map<string, Array<KeybindingRow>>();
   const comboByRowId = new Map<string, KeyCombo>();
   const usedModifiers = new Set<KeyboardModifier>();
-  const groupIds = new Set<KeybindingGroupId>();
   const push = (map: Map<string, Array<KeybindingRow>>, id: string, row: KeybindingRow) => {
     const bucket = map.get(id);
     if (bucket) bucket.push(row);
@@ -188,14 +186,16 @@ export function buildKeyboardIndex(
     push(byCombo, comboId(combo), row);
     push(byKey, combo.key, row);
     for (const mod of combo.mods) usedModifiers.add(mod);
-    groupIds.add(keybindingGroupFor(row.command).id);
   }
-  return { byCombo, byKey, comboByRowId, usedModifiers, groupIds };
+  return { byCombo, byKey, comboByRowId, usedModifiers };
 }
 
 // The base layer is an overview: it lists every binding on the key across layers.
 export const rowsForCombo = (index: KeyboardIndex, combo: KeyCombo) =>
   (combo.mods.length === 0 ? index.byKey.get(combo.key) : index.byCombo.get(comboId(combo))) ?? [];
+
+export const isBoundCombo = (index: KeyboardIndex, combo: KeyCombo) =>
+  index.byCombo.has(comboId(combo));
 
 export const isFreeCombo = (index: KeyboardIndex, combo: KeyCombo) =>
   combo.mods.length > 0 && rowsForCombo(index, combo).length === 0;
@@ -321,6 +321,11 @@ export function keyIdFromCode(code: string): string | null {
   if (letter) return letter.toLowerCase();
   if (/^F([1-9]|1[0-2])$/.test(code)) return code.toLowerCase();
   return EVENT_CODE_SHORTCUT_KEYS[code] ?? NAMED_CODES[code] ?? null;
+}
+
+export function comboFromEvent(event: KeyboardEvent): KeyCombo | null {
+  const key = keyIdFromCode(event.code);
+  return key !== null && MAP_KEY_IDS.has(key) ? { mods: layerFromEvent(event), key } : null;
 }
 
 export const layerFromEvent = (

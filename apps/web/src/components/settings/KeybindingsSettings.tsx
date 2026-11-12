@@ -1539,18 +1539,18 @@ export function KeybindingsSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      {showKeyboardMap ? (
-        <KeybindingsKeyboardMap
-          index={keyboardIndex}
-          platform={navigator.platform}
-          isBrowser={!isElectron}
-          selection={keySelection}
-          previewStore={previewStore}
-          canAssign={canWriteSettings && !isAddingBinding}
-          onSelect={selectKey}
-          onAssign={(combo) => setNewBindingKey(comboToKeybindingInput(combo, navigator.platform))}
-        />
-      ) : null}
+      {/* Always rendered and hidden below md by CSS, so it is laid out on first paint. */}
+      <KeybindingsKeyboardMap
+        index={keyboardIndex}
+        platform={navigator.platform}
+        isBrowser={!isElectron}
+        lookupShortcuts={showKeyboardMap}
+        selection={keySelection}
+        previewStore={previewStore}
+        canAssign={canWriteSettings && !isAddingBinding}
+        onSelect={selectKey}
+        onAssign={(combo) => setNewBindingKey(comboToKeybindingInput(combo, navigator.platform))}
+      />
       <SettingsSection
         {...searchableSetting("keybindings")}
         headerAction={!isElectron && !showKeyboardMap ? <BrowserKeybindingNotice /> : null}

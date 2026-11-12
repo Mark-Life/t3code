@@ -34,6 +34,7 @@ vi.mock(import("./SettingsScopeContext"), async (original) => ({
   }) as never,
 }));
 
+import { registerCommands } from "../../shortcuts/dispatcher";
 import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 import { KeybindingsSettingsPanel } from "./KeybindingsSettings";
 
@@ -170,6 +171,55 @@ describe("keyboard map", () => {
     await userEvent.keyboard("{/Meta}");
 
     await expect.element(page.getByText("⌘J 1 binding", { exact: true })).toBeInTheDocument();
+  });
+
+  it("looks up a pressed shortcut instead of running it, Escape clears it, except in a text field", async () => {
+    const togglePalette = vi.fn((event: KeyboardEvent) => event.preventDefault());
+    using _command = {
+      [Symbol.dispose]: registerCommands(
+        { "commandPalette.toggle": togglePalette },
+        {
+          keybindings: () => [
+            {
+              command: "commandPalette.toggle",
+              shortcut: {
+                key: "k",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: false,
+                modKey: true,
+              },
+            },
+          ],
+        },
+      ),
+    };
+    await using _panel = await renderWideMacPanel();
+
+    await userEvent.keyboard("{Meta>}k{/Meta}");
+
+    expect(togglePalette).not.toHaveBeenCalled();
+    await expect
+      .element(page.getByRole("button", { name: /^⌘K: / }))
+      .toHaveAttribute("aria-pressed", "true");
+    await expect.element(existingPill).not.toBeInTheDocument();
+
+    // The first Escape clears the lookup; the next one reaches the settings modal.
+    const modalEscape = vi.fn();
+    window.addEventListener("keydown", modalEscape);
+    using _modalEscape = {
+      [Symbol.dispose]: () => window.removeEventListener("keydown", modalEscape),
+    };
+    await userEvent.keyboard("{Escape}");
+    await expect.element(existingPill).toBeVisible();
+    expect(modalEscape).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Escape}");
+    expect(modalEscape).toHaveBeenCalledOnce();
+
+    await activate(page.getByRole("searchbox", { name: "Search keybindings" }), "focus");
+    await userEvent.keyboard("{Meta>}k{/Meta}");
+    expect(togglePalette).toHaveBeenCalledOnce();
   });
 
   it("opens the new keybinding row prefilled with a free combo", async () => {

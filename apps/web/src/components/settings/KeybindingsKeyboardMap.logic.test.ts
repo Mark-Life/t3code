@@ -8,6 +8,7 @@ import {
   buildKeyboardIndex,
   comboToKeybindingInput,
   isBrowserReservedCombo,
+  isBoundCombo,
   isFreeCombo,
   keyCapState,
   layerLabel,
@@ -68,15 +69,16 @@ describe("keyboard index", () => {
     expect(commands(["ctrl"], "n")).toEqual(["chat.new"]);
   });
 
-  it("records used modifiers and groups", () => {
+  it("records used modifiers", () => {
     expect([...index.usedModifiers].toSorted()).toEqual(["ctrl", "meta", "shift"]);
-    expect([...index.groupIds].toSorted()).toEqual(["preview", "terminal", "threads"]);
   });
 
   it("calls a combo free only in a modifier layer with no binding", () => {
     expect(isFreeCombo(index, { mods: ["meta"], key: "y" })).toBe(true);
     expect(isFreeCombo(index, { mods: ["meta"], key: "j" })).toBe(false);
     expect(isFreeCombo(index, { mods: [], key: "y" })).toBe(false);
+    expect(isBoundCombo(index, { mods: ["meta"], key: "j" })).toBe(true);
+    expect(isBoundCombo(index, { mods: [], key: "j" })).toBe(false);
   });
 
   it("captions and counts keys only from their own layer", () => {

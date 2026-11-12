@@ -2,6 +2,7 @@ import { XIcon } from "lucide-react";
 import {
   memo,
   useEffect,
+  useEffectEvent,
   useRef,
   useState,
   useSyncExternalStore,
@@ -11,9 +12,12 @@ import {
 
 import { observeResize } from "../../lib/observeResize";
 import { cn, isMacPlatform } from "../../lib/utils";
+import { registerKeybindingLookup } from "../../shortcuts/keybindingLookup";
 import { Button } from "../ui/button";
 import {
+  comboFromEvent,
   comboLabel,
+  isBoundCombo,
   isFreeCombo,
   keyboardLayout,
   keyIdFromCode,
@@ -263,9 +267,10 @@ const padScrollAreaForMap = (node: HTMLDivElement) => {
   if (!scrollArea) return;
   const media = window.matchMedia(STICKY_MEDIA_QUERY);
   const update = () => {
-    scrollArea.style.scrollPaddingTop = media.matches
-      ? `calc(var(--workspace-titlebar-scroll-fade-height) + ${node.offsetHeight}px)`
-      : "";
+    scrollArea.style.scrollPaddingTop =
+      media.matches && node.offsetHeight > 0
+        ? `calc(var(--workspace-titlebar-scroll-fade-height) + ${node.offsetHeight}px)`
+        : "";
   };
   const stopObserving = observeResize(node, update);
   media.addEventListener("change", update);
@@ -305,12 +310,15 @@ export function KeybindingsKeyboardMap({
   selection,
   previewStore,
   canAssign,
+  lookupShortcuts,
   onSelect,
   onAssign,
 }: {
   index: KeyboardIndex;
   platform: string;
   isBrowser: boolean;
+  /** Pressed shortcuts select their key instead of running. */
+  lookupShortcuts: boolean;
   selection: KeyCombo | null;
   previewStore: KeyboardPreviewStore;
   canAssign: boolean;
@@ -347,6 +355,30 @@ export function KeybindingsKeyboardMap({
     const isSame = selection?.key === key && sameLayer(selection.mods, baseLayer);
     onSelect(isSame ? null : { mods: baseLayer, key });
   };
+  // Free combos keep the browser default, such as copy or reload.
+  const lookUp = useEffectEvent((event: KeyboardEvent) => {
+    const combo = comboFromEvent(event);
+    if (combo === null) return;
+    if (isBoundCombo(index, combo)) event.preventDefault();
+    if (event.repeat) return;
+    setLatched(combo.mods);
+    onSelect(combo);
+  });
+  // The first Escape clears the lookup; the next one closes settings.
+  const clearLookup = useEffectEvent(() => {
+    if (selection === null && latched.length === 0) return false;
+    setLatched([]);
+    onSelect(null);
+    return true;
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- claims shortcuts pressed anywhere on the window while the map is shown
+  useEffect(() => {
+    if (!lookupShortcuts) return;
+    return registerKeybindingLookup(
+      (event) => lookUp(event),
+      () => clearLookup(),
+    );
+  }, [lookupShortcuts]);
 
   const renderCap = (
     cap: KeyCap,
@@ -417,7 +449,7 @@ export function KeybindingsKeyboardMap({
   return (
     <div
       ref={padScrollAreaForMap}
-      className="top-(--workspace-titlebar-scroll-fade-height) z-10 bg-background pb-2 [@media(min-height:45rem)]:sticky"
+      className="top-(--workspace-titlebar-scroll-fade-height) z-10 hidden bg-background pb-2 md:block [@media(min-height:45rem)]:sticky"
     >
       <div className="rounded-xl border border-border bg-card p-3">
         <div
@@ -438,7 +470,7 @@ export function KeybindingsKeyboardMap({
             </div>
           ))}
         </div>
-        <KeyboardLegend index={index} platform={platform} isBrowser={isBrowser} layer={layer} />
+        <KeyboardLegend platform={platform} isBrowser={isBrowser} layer={layer} />
       </div>
       <p role="status" className="sr-only">
         {selection ? `${comboLabel(selection, platform)} ${selectionNote(index, selection)}` : ""}
@@ -458,18 +490,19 @@ export function KeybindingsKeyboardMap({
           }}
           onAssign={onAssign}
         />
-      ) : null}
+      ) : (
+        // Holds the bar's space so selecting a key does not move the list.
+        <div aria-hidden className={`${BAR_CLASS} invisible`} />
+      )}
     </div>
   );
 }
 
 function KeyboardLegend({
-  index,
   platform,
   isBrowser,
   layer,
 }: {
-  index: KeyboardIndex;
   platform: string;
   isBrowser: boolean;
   layer: KeyboardLayer;
@@ -477,7 +510,7 @@ function KeyboardLegend({
   const layerText = layer.length === 0 ? "All layers" : layerLabel(layer, platform);
   return (
     <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-muted-foreground">
-      {KEYBINDING_GROUP_ORDER.filter((group) => index.groupIds.has(group.id)).map((group) => (
+      {KEYBINDING_GROUP_ORDER.map((group) => (
         <span key={group.id} className="inline-flex items-center gap-1.5">
           <span
             aria-hidden
@@ -503,6 +536,10 @@ function KeyboardLegend({
   );
 }
 
+// The hint holds the bar's place so selecting a key never moves the list.
+const BAR_CLASS =
+  "mt-2 flex min-h-10 items-center gap-2.5 rounded-lg border border-border px-3 py-1.5 text-xs";
+
 function KeyboardSelectionBar({
   index,
   platform,
@@ -519,7 +556,7 @@ function KeyboardSelectionBar({
   onAssign: (combo: KeyCombo) => void;
 }) {
   return (
-    <div className="mt-2 flex min-h-10 items-center gap-2.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs">
+    <div className={`${BAR_CLASS} bg-card`}>
       <span className="font-mono text-sm font-semibold">{comboLabel(selection, platform)}</span>
       <span className="text-muted-foreground">{selectionNote(index, selection)}</span>
       {isFreeCombo(index, selection) ? (
