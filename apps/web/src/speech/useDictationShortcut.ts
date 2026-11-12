@@ -3,6 +3,7 @@ import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useEffect, useRef, type RefObject } from "react";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
+import { isKeybindingLookupEvent } from "../shortcuts/keybindingLookup";
 import { useClientSettings } from "../hooks/useSettings";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { getTerminalFocusOwner } from "../lib/terminalFocus";
@@ -99,7 +100,8 @@ export function useDictationShortcut(input: ShortcutInput) {
       if (!ownsShortcut(id.current)) return;
       if (event.isComposing || event.keyCode === 229) return;
       const { speech } = current.current;
-      if (event.defaultPrevented || isCommandPaletteOpen()) return;
+      if (event.defaultPrevented || isCommandPaletteOpen() || isKeybindingLookupEvent(event))
+        return;
       if (
         event.key === "Escape" &&
         (pressed.current !== null ||

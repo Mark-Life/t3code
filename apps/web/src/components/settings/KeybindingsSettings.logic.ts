@@ -222,8 +222,9 @@ const KEYBINDING_GROUPS = [
   { id: "scripts", title: "Project scripts", prefixes: ["script"] },
 ] as const;
 const OTHER_KEYBINDING_GROUP = { id: "other", title: "Other" } as const;
+export const KEYBINDING_GROUP_ORDER = [...KEYBINDING_GROUPS, OTHER_KEYBINDING_GROUP] as const;
 
-function keybindingGroupFor(command: KeybindingCommand): { id: string; title: string } {
+export function keybindingGroupFor(command: KeybindingCommand) {
   const prefix = String(command).split(".")[0] ?? "";
   return (
     KEYBINDING_GROUPS.find((group) => (group.prefixes as ReadonlyArray<string>).includes(prefix)) ??
@@ -241,7 +242,7 @@ export function groupKeybindingRows(
     if (bucket) bucket.push(row);
     else rowsByGroup.set(group.id, [row]);
   }
-  return [...KEYBINDING_GROUPS, OTHER_KEYBINDING_GROUP].flatMap((group) => {
+  return KEYBINDING_GROUP_ORDER.flatMap((group) => {
     const groupRows = rowsByGroup.get(group.id);
     return groupRows ? [{ id: group.id, title: group.title, rows: groupRows }] : [];
   });

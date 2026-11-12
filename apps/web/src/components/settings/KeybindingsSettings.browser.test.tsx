@@ -34,6 +34,7 @@ vi.mock(import("./SettingsScopeContext"), async (original) => ({
   }) as never,
 }));
 
+import { registerCommands } from "../../shortcuts/dispatcher";
 import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 import { KeybindingsSettingsPanel } from "./KeybindingsSettings";
 
@@ -124,4 +125,116 @@ it("re-enables Save when a When editor closes on an expression it could not pars
 
   await expect.element(expression).toHaveValue("terminalFocus");
   await expect.element(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+});
+
+describe("keyboard map", () => {
+  async function renderWideMacPanel() {
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    await page.viewport(1280, 800);
+    const stack = new AsyncDisposableStack();
+    stack.defer(() => page.viewport(viewport.width, viewport.height));
+    stack.use(vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel"));
+    stack.use(
+      await render(
+        <RegistryProvider>
+          <KeybindingsSettingsPanel />
+        </RegistryProvider>,
+      ),
+    );
+    return stack.move();
+  }
+
+  it("filters the list to the bindings on a clicked key", async () => {
+    await using _panel = await renderWideMacPanel();
+    const terminalPill = page.getByRole("button", { name: /^Edit shortcut for Terminal: Toggle:/ });
+    await expect.element(existingPill).toBeVisible();
+
+    await page.getByRole("button", { name: /^J: / }).click();
+
+    await expect.element(terminalPill).toBeVisible();
+    await expect.element(existingPill).not.toBeInTheDocument();
+    await expect
+      .element(page.getByText("2 bindings across all layers", { exact: true }))
+      .toBeVisible();
+    await expect.element(page.getByText("J 2 bindings across all layers")).toBeInTheDocument();
+
+    await page.getByRole("button", { name: "Clear key filter" }).click();
+    await expect.element(existingPill).toBeVisible();
+    await expect.element(page.getByRole("button", { name: /^J: / })).toHaveFocus();
+  });
+
+  it("selects the held modifier combo when a key is clicked", async () => {
+    await using _panel = await renderWideMacPanel();
+
+    await userEvent.keyboard("{Meta>}");
+    await page.getByRole("button", { name: /^⌘J: / }).click();
+    await userEvent.keyboard("{/Meta}");
+
+    await expect.element(page.getByText("⌘J 1 binding", { exact: true })).toBeInTheDocument();
+  });
+
+  it("looks up a pressed shortcut instead of running it, Escape clears it, except in a text field", async () => {
+    const togglePalette = vi.fn((event: KeyboardEvent) => event.preventDefault());
+    using _command = {
+      [Symbol.dispose]: registerCommands(
+        { "commandPalette.toggle": togglePalette },
+        {
+          keybindings: () => [
+            {
+              command: "commandPalette.toggle",
+              shortcut: {
+                key: "k",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: false,
+                modKey: true,
+              },
+            },
+          ],
+        },
+      ),
+    };
+    await using _panel = await renderWideMacPanel();
+
+    await userEvent.keyboard("{Meta>}k{/Meta}");
+
+    expect(togglePalette).not.toHaveBeenCalled();
+    await expect
+      .element(page.getByRole("button", { name: /^⌘K: / }))
+      .toHaveAttribute("aria-pressed", "true");
+    await expect.element(existingPill).not.toBeInTheDocument();
+
+    // The first Escape clears the lookup; the next one reaches the settings modal.
+    const modalEscape = vi.fn();
+    window.addEventListener("keydown", modalEscape);
+    using _modalEscape = {
+      [Symbol.dispose]: () => window.removeEventListener("keydown", modalEscape),
+    };
+    await userEvent.keyboard("{Escape}");
+    await expect.element(existingPill).toBeVisible();
+    expect(modalEscape).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Escape}");
+    expect(modalEscape).toHaveBeenCalledOnce();
+
+    await activate(page.getByRole("searchbox", { name: "Search keybindings" }), "focus");
+    await userEvent.keyboard("{Meta>}k{/Meta}");
+    expect(togglePalette).toHaveBeenCalledOnce();
+  });
+
+  it("opens the new keybinding row prefilled with a free combo", async () => {
+    await using _panel = await renderWideMacPanel();
+
+    await page.getByRole("button", { name: "Command", exact: true }).first().click();
+    await page.getByRole("button", { name: "⌘Y: No shortcut" }).click();
+    await expect.element(page.getByText("is free.", { exact: true })).toBeVisible();
+    await expect
+      .element(page.getByText("No keybindings match your search."))
+      .not.toBeInTheDocument();
+    await page.getByRole("button", { name: "Assign" }).click();
+
+    await expect.element(newField).toHaveValue("mod+y");
+    await expect.element(page.getByRole("combobox").first()).toHaveFocus();
+    await expect.element(page.getByRole("button", { name: "Assign" })).toBeDisabled();
+  });
 });

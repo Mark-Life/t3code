@@ -9,6 +9,7 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef } from "react";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
+import { isKeybindingLookupEvent } from "../shortcuts/keybindingLookup";
 import { useClosedViewStore } from "../closedViewStore";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { environmentCatalog } from "../connection/catalog";
@@ -158,6 +159,7 @@ export function ReopenClosedViewShortcut() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
         event.defaultPrevented ||
+        isKeybindingLookupEvent(event) ||
         isCommandPaletteOpen() ||
         useClosedViewStore.getState().entries.length === 0 ||
         (event.target instanceof HTMLElement && event.target.closest("[data-keybinding-capture]"))

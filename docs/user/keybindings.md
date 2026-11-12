@@ -3,6 +3,12 @@
 Customize shortcuts in **Settings → Keybindings** on web and desktop. That page
 also lists the command IDs and defaults available in your version.
 
+On wider windows, a keyboard map sits above the list. Toggle a modifier key, or
+hold the real one, to see what each key does with it. Click a key to filter the
+list to its bindings. If the combination is free, **Assign** starts a new
+binding with it. In the browser, hatched keys are ones the browser may claim
+first; the desktop app receives them all.
+
 ## Composer controls
 
 `mod+shift+d` starts dictation in the focused editor, or the composer, and finishes it on the next press;
